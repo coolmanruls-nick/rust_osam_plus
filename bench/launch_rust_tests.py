@@ -407,6 +407,9 @@ class GraphOptions:
     static: bool = True
     prime: bool = False
     dynamic_ops: int = 0
+    bucket_size: int = 4
+    paths: int | None = None
+    evict: str = "ordered"
 
     def flags(self) -> list[str]:
         flags = ["--build", "static" if self.static else "dynamic"]
@@ -414,6 +417,13 @@ class GraphOptions:
             flags.append("--prime")
         if self.dynamic_ops:
             flags += ["--dynamic-ops", str(self.dynamic_ops)]
+        #NICK NEW BUCKET SIZE CHANGE
+        if self.bucket_size != 4:
+            flags += ["--bucket-size", str(self.bucket_size)]
+        if self.paths is not None:
+            flags += ["--paths", str(self.paths)]
+        if self.evict != "ordered":
+            flags += ["--evict", self.evict]
         return flags
 
     @property
@@ -421,7 +431,11 @@ class GraphOptions:
         """Log-name suffix; empty for the defaults, so existing names are unchanged."""
         return (
             ("" if self.static else "_build-dynamic")
-            + ("_prime" if self.prime else "")
+            + ("_prime" if self.prime else "") 
+            #NICK NEW BUCKET SIZE TAG
+            + (f"_z-{self.bucket_size}" if self.bucket_size != 4 else "")
+            + (f"_paths-{self.paths}" if self.paths is not None else "")
+            + ("_evict-random" if self.evict == "random" else "")
             + (f"_dynops-{self.dynamic_ops}" if self.dynamic_ops else "")
         )
 
@@ -744,12 +758,17 @@ def _sd(variance: float | None) -> float | None:
 
 
 # Graph-option columns, present when a log was built with non-default options.
-OPTION_FIELDS = ["build", "prime", "dynamic_ops"]
+OPTION_FIELDS = ["build", "prime", "dynamic_ops", "bucket_size", "ordered_evict"]
+#NICK NEW DEFAULT OPTIONS
+DEFAULT_OPTIONS = {"build": "static", "prime": False, "dynamic_ops": 0, "bucket_size": 4,
+                   "ordered_evict": True}
 
 
 def option_columns(config: dict[str, Any]) -> dict[str, Any]:
     columns = {key: config[key] for key in OPTION_FIELDS if key in config}
-    if columns == {"build": "static", "prime": False, "dynamic_ops": 0}:
+    # if columns == {"build": "static", "prime": False, "dynamic_ops": 0}:
+    #NICK NEW, simplified down chaning the defaults
+    if all(DEFAULT_OPTIONS[key] == value for key, value in columns.items()):
         return {}
     return columns
 
@@ -1047,6 +1066,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         "--early-trials", type=int, default=None,
         help=f"Trials for {', '.join(EARLY_TERMINATING)} (default {EARLY_TRIALS}, as --trials).",
     )
+    parser.add_argument("--bucket-size", type=int, default=4, choices=[2,3,4,5],
+                        help="PathOSAM+ bucket size Z (crypto runs)")
+    parser.add_argument("--paths", type=int, default=None, choices=[1,2,3,4],
+                        help="eviction paths per read (default: 2 for OSAM+/BOSAM, else 1)")
+    parser.add_argument("--evict", choices=["ordered", "random"], default="ordered")
     parser.add_argument("--min-power", type=int, default=min(POWERS))
     parser.add_argument("--max-power", type=int, default=max(POWERS))
     parser.add_argument(
@@ -1119,7 +1143,8 @@ def main() -> int:
             print(f"--no-crypto: ignoring --mode {args.mode}; running every job without cryptography")
         modes = ("dry-run",)
     powers = range(args.min_power, args.max_power + 1)
-    options = GraphOptions(static=args.static, prime=args.prime, dynamic_ops=args.dynamic_ops)
+    options = GraphOptions(static=args.static, prime=args.prime, dynamic_ops=args.dynamic_ops,
+                           bucket_size=args.bucket_size, paths=args.paths, evict=args.evict)
     probe = BlockFitProbe(binary)
     jobs, skipped = build_jobs(
         binary, probe, modes, args.block_sizes, args.pointers, args.degrees, powers,

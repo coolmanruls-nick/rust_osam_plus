@@ -108,6 +108,13 @@ struct Config {
     /// Random add/delete operations between the build and the algorithms.
     dynamic_ops: usize,
     output: Option<String>,
+    /// Path OSAM+ bucket size Z (crypto only runs).
+    bucket_size: usize,
+    /// Eviction paths per a multi-path read.
+    /// 2 for OSAM+/BOSAM, 1 for the other pointers.
+    read_paths: Option<usize>,
+    ///True (reverse-lexico) False (random).
+    ordered_evict: bool,
 }
 
 /// Graph-construction measurements reported before any trial.
@@ -690,23 +697,31 @@ where
     // writes in the stash and evict two paths on every read (BOSAM also
     // flushes in public batches); the other pointers evict one path on every
     // read and every write.
-    if kind.access_strategy().reads == ReadStrategy::MultiPath {
-        install_and_run::<P, B, C, BLOCK, 2>(
-            config, input, out, layout, pointer_branching_factor, kind, codec, backend, dry,
-            graph, build,
-        )
-    } else {
-        install_and_run::<P, B, C, BLOCK, 1>(
-            config, input, out, layout, pointer_branching_factor, kind, codec, backend, dry,
-            graph, build,
-        )
+    // --paths overrides that default. Z and the path count are compile-time
+    // constants, so each supported pair is listed.
+    let default_paths = if kind.access_strategy().reads == ReadStrategy::MultiPath { 2 } else { 1 };
+    let paths = config.read_paths.unwrap_or(default_paths);
+    macro_rules! run {
+        ($z:literal, $p:literal) => {
+            install_and_run::<P, B, C, BLOCK, $z, $p>(
+                config, input, out, layout, pointer_branching_factor, kind, codec, backend, dry,
+                graph, build,
+            )
+        };
+    }
+    match (config.bucket_size, paths) {
+        (2, 1) => run!(2, 1), (2, 2) => run!(2, 2), (2, 3) => run!(2, 3), (2, 4) => run!(2, 4),
+        (3, 1) => run!(3, 1), (3, 2) => run!(3, 2), (3, 3) => run!(3, 3), (3, 4) => run!(3, 4),
+        (4, 1) => run!(4, 1), (4, 2) => run!(4, 2), (4, 3) => run!(4, 3), (4, 4) => run!(4, 4),
+        (5, 1) => run!(5, 1), (5, 2) => run!(5, 2), (5, 3) => run!(5, 3), (5, 4) => run!(5, 4),
+        _ => Err(SamError::InvalidParameter("supported: bucket size 2-5, paths 1-4").into()),
     }
 }
 
 /// Installs the dry-run memory into an encrypted Path OSAM+ tree that evicts
 /// `PATHS` paths per multi-path read, then runs the trials on it.
 #[allow(clippy::too_many_arguments)]
-fn install_and_run<P, B, C, const BLOCK: usize, const PATHS: usize>(
+fn install_and_run<P, B, C, const BLOCK: usize, const Z: usize, const PATHS: usize>(
     config: &Config,
     input: &GraphInput,
     out: &mut dyn Write,
@@ -730,14 +745,14 @@ where
     let block_capacity = allocated
         .checked_next_power_of_two()
         .ok_or_else(|| SamError::Backend("OSAM block capacity overflow".into()))?;
-    let mut encrypted = PathOsamSam::<B::Cell, _, BLOCK, 4, PATHS>::from_snapshot(
+    let mut encrypted = PathOsamSam::<B::Cell, _, BLOCK, Z, PATHS>::from_snapshot(
         snapshot,
         block_capacity,
         config.stash_size,
         true,
         kind.access_policy(),
         kind.access_strategy(),
-        true,
+        config.ordered_evict,
         config.seed,
         codec,
     )?
@@ -1050,7 +1065,7 @@ where
         "config impl=native mode={} pointer={} cache={} move={} block_size={} pointer_branching_factor={} \
          graph_branching_factor={} vertices={} edges={} seed={} walk_length={} max_steps={} \
          max_neighbors={} damping_factor={} stash_size={} sam_policy_checks={} layout={} \
-         build={} prime={} dynamic_ops={}",
+         build={} prime={} dynamic_ops={} bucket_size={} ordered_evict={}",
         if config.crypto { "crypto" } else { "dry-run" },
         config.pointer,
         config.cache,
@@ -1080,6 +1095,8 @@ where
         },
         config.prime,
         config.dynamic_ops,
+        config.bucket_size,
+        config.ordered_evict,
     )?;
     writeln!(
         out,
@@ -1458,6 +1475,10 @@ oblivious_graph_bench --graph FILE --bs BYTES --pt POINTER [options]
                       copies the object's nested pointers, and every change is a
                       move + put (the paper's OSAM and ORAM series)
   --dry-run | --crypto [--stash-size N]   in-memory SAM (default) or Path OSAM+
+  --bucket-size N | --z N   crypto only: Path OSAM+ bucket size Z, 2-5 (default 4)
+  --paths N           crypto only: eviction paths per read, 1-4 (default 2 for
+                      multiwrite and r-ary pointers, 1 for the others)
+  --evict ordered|random   crypto only: eviction order (default ordered)
   --flush-batch N     multiwrite (OSAM+): its writes stay in the stash and each read
                       evicts 2 paths; after N writes not absorbed by reads, one public
                       flush of N paths (one round trip, counted as a read). Default 2
@@ -1515,6 +1536,9 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
     let mut dynamic_build = false;
     let mut prime = false;
     let mut dynamic_ops = 0;
+    let mut bucket_size: usize = 4; //NEW
+    let mut read_paths: Option<usize> = None; //NEW
+    let mut ordered_evict = true; //NEW
     let mut args = args.into_iter().collect::<Vec<_>>().into_iter();
     while let Some(argument) = args.next() {
         let value = |args: &mut std::vec::IntoIter<String>| {
@@ -1557,6 +1581,20 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
             "--dry-run" => crypto = false,
             "--crypto" | "--encrypted" => crypto = true,
             "--stash-size" => stash_size = value(&mut args)?.parse()?,
+            //OSAM+ custom settings
+            "--bucket-size" | "--z" => bucket_size = value(&mut args)?.parse()?,
+            "--paths" => read_paths = Some(value(&mut args)?.parse()?),
+            "--evict" => {
+                ordered_evict = match value(&mut args)?.as_str() {
+                    "ordered" => true,
+                    "random" => false,
+                    other => {
+                        return Err(
+                        format!("--evict expects ordered or random, not {other:?}").into()
+                        )
+                    }
+                }
+            }
             "--flush-batch" => flush_batch = value(&mut args)?.parse()?,
             "--output" => output = Some(value(&mut args)?),
             "--check-sam-policy" => check_sam_policy = true,
@@ -1582,6 +1620,14 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
     }
     if flush_batch == 0 {
         return Err("flush_batch must be positive".into());
+    }
+    //NEW
+    if !(2..=5).contains(&bucket_size) {
+        return Err("bucket_size must be 2 to 5".into());
+    }
+    //NEW
+    if matches!(read_paths, Some(p) if !(1..=4).contains(&p)) {
+        return Err("paths must be 1 to 4".into());
     }
     if max_neighbors == 0 {
         return Err("max_neighbors must be positive".into());
@@ -1627,6 +1673,9 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
         no_move,
         crypto,
         stash_size,
+        bucket_size,
+        read_paths,
+        ordered_evict,
         flush_batch,
         check_sam_policy,
         pretend_original_fits,
@@ -1731,7 +1780,31 @@ mod tests {
             .unwrap();
         assert_eq!(field(summary, "attempts"), "20");
     }
-
+    /*NEW TEST FOR CRYPTO RUNS TO ACCEPT OSAM PARAMETERS */
+    #[test]
+    fn crypto_runs_accept_osam_parameters() {
+        let records = bench("0 1\n1 2\n2 0\n", &[
+            "--bs", 
+            "64", 
+            "--pt", 
+            "multiwrite", 
+            "--cache", 
+            "--alg", 
+            "bfs:1", 
+            "--max-steps", 
+            "2",
+            "--crypto",
+            "--z",
+            "3",
+            "--paths",
+            "3",
+            "--evict",
+            "random",
+        ]).unwrap();
+        assert!(records.iter().any(|r| r.starts_with("config")
+            && r.contains("bucket_size=3") && r.contains("ordered_evict=false")));
+        assert!(records.iter().any(|r| r.starts_with("build") && r.contains("read_evictions=3")));
+    }
     #[test]
     fn a_fixed_short_start_fails_the_algorithm_after_one_run() {
         let records = bench(
