@@ -110,7 +110,8 @@ from graphs import GENERATORS, generate_graph  # noqa: E402
 RUST_CRATE = Path(os.environ.get("RUST_CRATE", ROOT.parent / "crates" / "sam-model"))
 RESULTS_DIR = ROOT / "results"
 LOG_DIR = RESULTS_DIR / "rust-logs"
-GRAPH_DIR = ROOT / "graphs"
+# OSAM_GRAPH_DIR moves the graph cache (e.g. outside a synced folder).
+GRAPH_DIR = Path(os.environ.get("OSAM_GRAPH_DIR") or ROOT / "graphs")
 SUMMARY_CSV = LOG_DIR / "summary.csv"
 DATASET_LOG_DIR = RESULTS_DIR / "rust-dataset-logs"
 DATASET_ROOT = local.DATASET_ROOT

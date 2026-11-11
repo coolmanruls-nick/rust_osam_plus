@@ -29,6 +29,7 @@ import argparse
 import collections
 import concurrent.futures
 import math
+import os
 import random
 import statistics
 import subprocess
@@ -37,7 +38,7 @@ from pathlib import Path
 from launch_rust_tests import RECURSIVE_STRUCTURES, build_binary, oram_recursion_levels
 
 ROOT = Path(__file__).resolve().parent
-GRAPH_DIR = ROOT / "graphs" / "skew"
+GRAPH_DIR = Path(os.environ.get("OSAM_GRAPH_DIR") or ROOT / "graphs") / "skew"
 LOG_DIR = ROOT / "results" / "skew-logs"
 SUMMARY = ROOT / "results" / "skew-summary.csv"
 

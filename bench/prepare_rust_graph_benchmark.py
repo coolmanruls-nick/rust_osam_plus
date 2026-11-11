@@ -7,6 +7,7 @@ is reusable, and every requested trial executes inside one Rust process.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from graphs import GENERATORS, generate_graph  # noqa: E402  (the shared ER generator)
 
 RUST_CRATE = Path(__file__).resolve().parent.parent / "crates" / "sam-model"
-GRAPH_DIR = Path(__file__).resolve().parent / "graphs"
+GRAPH_DIR = Path(os.environ.get("OSAM_GRAPH_DIR") or Path(__file__).resolve().parent / "graphs")
 
 
 def main() -> None:

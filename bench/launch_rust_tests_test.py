@@ -235,14 +235,16 @@ class GraphOptionsTest(unittest.TestCase):
             rows = rust.write_report(root, root / "summary.csv")
             header = (root / "summary.csv").read_text().splitlines()[0].split(",")
             self.assertEqual(header, rust.FIELDS)
-            lines[0] += " impl=native build=dynamic prime=true dynamic_ops=100"
+            lines[0] += (" impl=native build=dynamic prime=true dynamic_ops=100"
+                         " bucket_size=3 ordered_evict=false")
             (root / "dynamic.log").write_text("\n".join(lines) + "\n")
             rows = rust.write_report(root, root / "summary.csv")
             header = (root / "summary.csv").read_text().splitlines()[0].split(",")
         self.assertEqual(header[len(rust.FIELDS):], rust.OPTION_FIELDS)
         dynamic = [row for row in rows if row["log"] == "dynamic.log"]
-        self.assertEqual((dynamic[0]["build"], dynamic[0]["prime"], dynamic[0]["dynamic_ops"]),
-                         ("dynamic", True, 100))
+        self.assertEqual((dynamic[0]["build"], dynamic[0]["prime"], dynamic[0]["dynamic_ops"],
+                          dynamic[0]["bucket_size"], dynamic[0]["ordered_evict"]),
+                         ("dynamic", True, 100, 3, False))
 
     def test_dataset_export_writes_native_edge_lists(self) -> None:
         import graphs
@@ -266,8 +268,13 @@ class SelfContainedTest(unittest.TestCase):
             self.assertEqual(Path(module.__file__).resolve().parent, bench)
         self.assertNotIn("launch_local_tests", sys.modules)
         self.assertNotIn("prepare_rust_graph_benchmark", sys.modules)
-        # Outputs stay inside rust_osam_plus/bench.
-        for path in (rust.LOG_DIR, rust.DATASET_LOG_DIR, rust.GRAPH_DIR):
+        # Outputs stay inside rust_osam_plus/bench (unless OSAM_GRAPH_DIR moves the graph cache).
+        import os
+
+        outputs = [rust.LOG_DIR, rust.DATASET_LOG_DIR]
+        if not os.environ.get("OSAM_GRAPH_DIR"):
+            outputs.append(rust.GRAPH_DIR)
+        for path in outputs:
             self.assertTrue(path.resolve().is_relative_to(bench), path)
         self.assertEqual(rust.RUST_CRATE.resolve(), (bench.parent / "crates" / "sam-model").resolve())
 
