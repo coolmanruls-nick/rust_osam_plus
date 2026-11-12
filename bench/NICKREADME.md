@@ -41,3 +41,6 @@ python launch_rust_tests.py --mode crypto --pointers multiwriterary --block-size
 "Combined table for all runs:"
 python launch_rust_tests.py --report-only
 ```
+## WHAT TO DO NEXT ##
+Improve the actual rust results files so I can easily access specific runs
+Start benching from this point (ER benches for fuller): C:\Users\coolm\OneDrive\Research-Nick\rust_osam_plus\bench\results\rust-logs\ER_n-65536_d-20_bs-64_trials-50-50_pt-multiwriterary_cache-true_mode-dry-run_b-6.log.partial
