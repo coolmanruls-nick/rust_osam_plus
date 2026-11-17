@@ -95,6 +95,9 @@ struct Config {
     /// OSAM+ public flush size: a flush of this many paths after this many
     /// writes not absorbed by reads.
     flush_batch: usize,
+    /// Extra eviction paths per read of the pointers that buffer their writes
+    /// (multiwrite, multiwriterary, buffered balanced) in crypto mode.
+    read_evictions: usize,
     /// Keep per-address read/write-limit checks in the encrypted SAM. They are
     /// client state proportional to the number of addresses, so off by default.
     check_sam_policy: bool,
@@ -697,9 +700,14 @@ where
     // writes in the stash and evict two paths on every read (BOSAM also
     // flushes in public batches); the other pointers evict one path on every
     // read and every write.
-    // --paths overrides that default. Z and the path count are compile-time
-    // constants, so each supported pair is listed.
-    let default_paths = if kind.access_strategy().reads == ReadStrategy::MultiPath { 2 } else { 1 };
+    // --read-evictions sets the multi-path pointers' count (default 2);
+    // --paths overrides it for every pointer. Z and the path count are
+    // compile-time constants, so each supported pair is listed.
+    let default_paths = if kind.access_strategy().reads == ReadStrategy::MultiPath {
+        config.read_evictions
+    } else {
+        1
+    };
     let paths = config.read_paths.unwrap_or(default_paths);
     macro_rules! run {
         ($z:literal, $p:literal) => {
@@ -714,7 +722,14 @@ where
         (3, 1) => run!(3, 1), (3, 2) => run!(3, 2), (3, 3) => run!(3, 3), (3, 4) => run!(3, 4),
         (4, 1) => run!(4, 1), (4, 2) => run!(4, 2), (4, 3) => run!(4, 3), (4, 4) => run!(4, 4),
         (5, 1) => run!(5, 1), (5, 2) => run!(5, 2), (5, 3) => run!(5, 3), (5, 4) => run!(5, 4),
-        _ => Err(SamError::InvalidParameter("supported: bucket size 2-5, paths 1-4").into()),
+        // --read-evictions 8..32 (upstream), at the default Z = 4.
+        (4, 8) => run!(4, 8), (4, 16) => run!(4, 16), (4, 24) => run!(4, 24),
+        (4, 32) => run!(4, 32),
+        _ => Err(SamError::InvalidParameter(
+            "supported: bucket size 2-5 with paths 1-4, or bucket size 4 with \
+             read evictions 8, 16, 24, 32",
+        )
+        .into()),
     }
 }
 
@@ -1482,6 +1497,9 @@ oblivious_graph_bench --graph FILE --bs BYTES --pt POINTER [options]
   --flush-batch N     multiwrite (OSAM+): its writes stay in the stash and each read
                       evicts 2 paths; after N writes not absorbed by reads, one public
                       flush of N paths (one round trip, counted as a read). Default 2
+  --read-evictions E  crypto mode: extra eviction paths per read for the pointers that
+                      buffer their writes (multiwrite, multiwriterary, balancedrary);
+                      one of 2, 4, 8, 16, 24, 32. Default 2
   --pretend-original-fits   dry-run only: if `original` records cannot fit the block,
                       use Python's edge fanout (bs - 16) / 8 instead of failing; if
                       `balanced` root cells cannot fit, use multiwrite's layout. The
@@ -1530,6 +1548,7 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
     let mut crypto = false;
     let mut stash_size: u64 = 40; // osam_plus::DEFAULT_STASH_OVERFLOW_SIZE
     let mut flush_batch: usize = OSAM_PLUS_READ_EVICTIONS;
+    let mut read_evictions: usize = OSAM_PLUS_READ_EVICTIONS;
     let mut output = None;
     let mut check_sam_policy = false;
     let mut pretend_original_fits = false;
@@ -1596,6 +1615,7 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
                 }
             }
             "--flush-batch" => flush_batch = value(&mut args)?.parse()?,
+            "--read-evictions" => read_evictions = value(&mut args)?.parse()?,
             "--output" => output = Some(value(&mut args)?),
             "--check-sam-policy" => check_sam_policy = true,
             "--pretend-original-fits" => pretend_original_fits = true,
@@ -1677,6 +1697,7 @@ fn parse_arg_list(args: impl IntoIterator<Item = String>) -> BenchResult<Config>
         read_paths,
         ordered_evict,
         flush_batch,
+        read_evictions,
         check_sam_policy,
         pretend_original_fits,
         dynamic_build,
