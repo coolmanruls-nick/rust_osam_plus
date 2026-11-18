@@ -366,6 +366,8 @@ def summary_table(summary, structures) -> str:
     ]
     for d, bs in TABLE_CONFIGURATIONS:
         rows = summary[(summary.d == d) & (summary.bs == bs)]
+        if rows.empty:  # no runs at this (d, bs), e.g. only bs = 64 was run
+            continue
         n = int(rows.log2n.max())
         lines.append(f"\\multirow{{{len(BOSAM_SERIES)}}}{{*}}{{\\shortstack[l]{{$d={d}$\\\\$bs={bs}$\\\\$n=2^{{{n}}}$}}}}")
         for index, series in enumerate(BOSAM_SERIES):
